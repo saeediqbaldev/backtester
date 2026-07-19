@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    volumes:
+      - trading_data:/data
+    environment:
+      - DB_PATH=/data/trading.db
+    expose:
+      - "8000"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80"
+    # Coolify will attach its own reverse proxy / domain / SSL to this
+    # service automatically -- no need to hardcode a port mapping here.
+
+volumes:
+  trading_data:
