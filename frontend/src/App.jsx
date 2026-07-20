@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import ChartPanel from './components/ChartPanel.jsx'
+import ChartPanel, { DEFAULT_CHART_OPTIONS } from './components/ChartPanel.jsx'
 import ReplayControls from './components/ReplayControls.jsx'
 import TimeframeBar from './components/TimeframeBar.jsx'
-import BacktestPanel from './components/BacktestPanel.jsx'
 import DrawingToolbar from './components/DrawingToolbar.jsx'
+import ChartSettingsPanel from './components/ChartSettingsPanel.jsx'
 import { fetchOHLCV, fetchDefaultWatchlist } from './api'
 
 export default function App() {
@@ -17,14 +17,19 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
+  // Replay: awaitingAnchor = user needs to click a bar to choose the start point.
   const [replayMode, setReplayMode] = useState(false)
+  const [awaitingAnchor, setAwaitingAnchor] = useState(false)
   const [visibleCount, setVisibleCount] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [speed, setSpeed] = useState(500)
-  const [markers, setMarkers] = useState([])
+  const [speed, setSpeed] = useState(800)
+  const [markers] = useState([])
 
   const [activeTool, setActiveTool] = useState('cursor')
   const [drawings, setDrawings] = useState([])
+
+  const [chartOptions, setChartOptions] = useState(DEFAULT_CHART_OPTIONS)
+  const [showSettings, setShowSettings] = useState(false)
 
   const intervalRef = useRef(null)
 
@@ -37,11 +42,15 @@ export default function App() {
     setLoading(true)
     setError(null)
     setDrawings([])
-    fetchOHLCV(source, symbol, timeframe, 1000)
+    setReplayMode(false)
+    setAwaitingAnchor(false)
+    setIsPlaying(false)
+
+    fetchOHLCV(source, symbol, timeframe, 5000)
       .then((data) => {
         if (cancelled) return
         setCandles(data.candles)
-        setVisibleCount(data.candles.length) // start fully revealed; replay mode resets this
+        setVisibleCount(data.candles.length) // fully revealed until replay is started
       })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false))
@@ -52,7 +61,7 @@ export default function App() {
 
   // replay playback loop
   useEffect(() => {
-    if (isPlaying && replayMode) {
+    if (isPlaying && replayMode && !awaitingAnchor) {
       intervalRef.current = setInterval(() => {
         setVisibleCount((v) => {
           if (v >= candles.length) {
@@ -64,19 +73,36 @@ export default function App() {
       }, speed)
     }
     return () => clearInterval(intervalRef.current)
-  }, [isPlaying, replayMode, speed, candles.length])
+  }, [isPlaying, replayMode, awaitingAnchor, speed, candles.length])
 
   function handleEnterReplay() {
+    if (!candles.length) return
     setReplayMode(true)
-    setVisibleCount(Math.max(20, Math.floor(candles.length * 0.3)))
+    setAwaitingAnchor(true)
     setIsPlaying(false)
-    setMarkers([])
+    setActiveTool('cursor')
+    setVisibleCount(candles.length) // show full history so the user can click a starting bar
+  }
+
+  function handleAnchorSelected(clickedTime) {
+    // find the last candle at or before the clicked time
+    let idx = candles.findIndex((c) => c.time > clickedTime)
+    if (idx === -1) idx = candles.length
+    const startIndex = Math.max(10, idx) // keep at least 10 bars of context
+    setVisibleCount(startIndex)
+    setAwaitingAnchor(false)
+    setIsPlaying(false)
   }
 
   function handleExitReplay() {
     setReplayMode(false)
+    setAwaitingAnchor(false)
     setIsPlaying(false)
     setVisibleCount(candles.length)
+  }
+
+  function handleNextBar() {
+    setVisibleCount((v) => Math.min(candles.length, v + 1))
   }
 
   function handleSymbolSubmit(e) {
@@ -94,6 +120,9 @@ export default function App() {
     setActiveTool((current) => (current === toolId ? 'cursor' : toolId))
   }
 
+  const replayReady = replayMode && !awaitingAnchor
+  const replayComplete = replayReady && visibleCount >= candles.length
+
   return (
     <div className="app">
       <header className="topbar">
@@ -103,7 +132,7 @@ export default function App() {
             Crypto
           </button>
           <button className={source === 'stock' ? 'active' : ''} onClick={() => setSource('stock')}>
-            Stocks
+            Stocks / FX / Indices
           </button>
         </div>
         <form onSubmit={handleSymbolSubmit} className="symbol-form">
@@ -129,22 +158,34 @@ export default function App() {
 
       <TimeframeBar timeframe={timeframe} onChange={setTimeframe} />
 
-      <main className="main-grid">
+      <main className="main-full">
         <section className="chart-section">
           <div className="chart-toolbar">
             <span className="symbol-label">{symbol} · {timeframe}</span>
-            {!replayMode ? (
-              <button className="btn" onClick={handleEnterReplay}>Start bar replay</button>
-            ) : (
-              <button className="btn" onClick={handleExitReplay}>Exit replay</button>
-            )}
+            <div className="chart-toolbar-actions">
+              {!replayMode ? (
+                <button className="btn" onClick={handleEnterReplay}>Start bar replay</button>
+              ) : (
+                <button className="btn" onClick={handleExitReplay}>Exit replay</button>
+              )}
+              <button className="btn" onClick={() => setShowSettings((s) => !s)}>⚙ Chart settings</button>
+            </div>
           </div>
 
-          <DrawingToolbar
-            activeTool={activeTool}
-            onSelectTool={handleToolSelect}
-            onClear={() => setDrawings([])}
-          />
+          <div className="chart-toolbar-row">
+            <DrawingToolbar
+              activeTool={activeTool}
+              onSelectTool={handleToolSelect}
+              onClear={() => setDrawings([])}
+            />
+            {showSettings && (
+              <ChartSettingsPanel
+                options={chartOptions}
+                onChange={setChartOptions}
+                onClose={() => setShowSettings(false)}
+              />
+            )}
+          </div>
 
           {loading && <p className="hint">Loading data…</p>}
           {error && <p className="error">{error}</p>}
@@ -158,27 +199,26 @@ export default function App() {
               drawings={drawings}
               setDrawings={setDrawings}
               onToolDone={() => setActiveTool('cursor')}
+              chartOptions={chartOptions}
+              awaitingAnchor={awaitingAnchor}
+              onAnchorSelected={handleAnchorSelected}
             />
           )}
 
-          {replayMode && (
+          {replayReady && (
             <ReplayControls
               isPlaying={isPlaying}
               onTogglePlay={() => setIsPlaying((p) => !p)}
-              onStepBack={() => setVisibleCount((v) => Math.max(1, v - 1))}
-              onStepForward={() => setVisibleCount((v) => Math.min(candles.length, v + 1))}
-              onReset={() => setVisibleCount(Math.max(20, Math.floor(candles.length * 0.3)))}
+              onNextBar={handleNextBar}
+              onExit={handleExitReplay}
               speed={speed}
               onSpeedChange={setSpeed}
               visibleCount={visibleCount}
               total={candles.length}
+              complete={replayComplete}
             />
           )}
         </section>
-
-        <aside className="sidebar">
-          <BacktestPanel symbol={symbol} source={source} timeframe={timeframe} />
-        </aside>
       </main>
     </div>
   )

@@ -8,8 +8,7 @@ from sqlalchemy import and_
 from .database import init_db, get_session, Candle
 from .data_sources import fetch_ohlcv, pick_base_timeframe
 from .aggregator import resample
-from .backtest import sma_crossover_backtest
-from .schemas import OHLCVResponse, CandleOut, BacktestRequest, BacktestResponse
+from .schemas import OHLCVResponse, CandleOut
 
 app = FastAPI(title="Trading Tool API")
 
@@ -103,7 +102,7 @@ def get_ohlcv(
     symbol: str = Query(..., description="e.g. AAPL or BTC/USDT"),
     source: str = Query(..., pattern="^(stock|crypto)$"),
     timeframe: str = Query("1d"),
-    limit: int = Query(500, le=5000),
+    limit: int = Query(5000, le=20000, description="Max candles to return; defaults high to show max available history"),
     db: Session = Depends(get_session),
 ):
     base_series = _get_fresh_series(db, source, symbol, timeframe)
@@ -122,23 +121,6 @@ def get_ohlcv(
         for _, row in result.iterrows()
     ]
     return OHLCVResponse(symbol=symbol, source=source, timeframe=timeframe, candles=candles)
-
-
-@app.post("/api/backtest", response_model=BacktestResponse)
-def run_backtest(req: BacktestRequest, db: Session = Depends(get_session)):
-    base_series = _get_fresh_series(db, req.source, req.symbol, req.timeframe)
-    if base_series.empty:
-        raise HTTPException(status_code=404, detail="No data found for this symbol")
-
-    df = resample(base_series, req.timeframe).tail(req.lookback_bars)
-    result = sma_crossover_backtest(df, req.fast_period, req.slow_period, req.initial_cash)
-
-    return BacktestResponse(
-        symbol=req.symbol,
-        trades=result["trades"],
-        equity_curve=result["equity_curve"],
-        stats=result["stats"],
-    )
 
 
 @app.get("/api/symbols/popular")
